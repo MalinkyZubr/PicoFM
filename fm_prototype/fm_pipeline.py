@@ -1,6 +1,8 @@
 from threading import Thread, Lock
 from abc import ABC, abstractmethod
 from typing import Callable
+from time import sleep
+from math import sin
 
 
 class AbstractLock(ABC):
@@ -13,31 +15,26 @@ class SharedBuffer:
         self.pull_lock: Lock = Lock()
         
         self.pull_lock.acquire()
+        self.push_lock.acquire()
+        
+        self.source_value: float = 0.0
 
         self.buffer: list[float] = [0.0 for x in range(buffer_length)]
-        
-    def __base_pull_operation(self) -> float:
-        value = self.buffer[-1]
-        self.buffer = [0] + self.buffer[0:-1]
-        
-        return value
-    
-    def __base_push_operation(self, value: float) -> None:
-        self.buffer[0] = value 
 
     def pull_head(self) -> float:
-        self.pull_lock.acquire()
-        
-        value: float = self.__base_pull_operation()
-        
         self.push_lock.release()
+        
+        value: float = self.buffer[-1]
+        self.buffer = [self.source_value] + self.buffer[0:-1]
+        
+        self.pull_lock.acquire()
         
         return value
     
     def push_tail(self, value: float) -> None:
         self.push_lock.acquire()
         
-        self.__base_push_operation(value)
+        self.source_value = value 
         
         self.pull_lock.release()
     
@@ -67,9 +64,15 @@ class AbstractPipelineStep(ABC):
 
         
 class AbstractThreadUnit(ABC): # must be abstracted in prototype to simulate when library will be platform independent
+    num_threads: int = 0
+    
     def __init__(self, function: list[Callable]):
         self.functions: list[Callable] = function
         self.runflag = False
+        
+        AbstractThreadUnit.num_threads += 1
+        
+        self.thread_number: int = AbstractThreadUnit.num_threads
 
     def run_function_pool(self):
         while self.runflag:
@@ -145,13 +148,17 @@ class Pipeline:
     def __fill_source_buffer(self):
         push_value: float = self.source()
         self.source_buffer.push_tail(push_value)
+        
+        print(self.source_buffer.buffer, end=" -> ")
 
     def __pull_sink_buffer(self):
+        print(f"STEP RESULT: {self.sink_buffer.source_value} -> {self.sink_buffer.buffer}", end="\r")
         pull_value: float = self.sink_buffer.pull_head()
         self.sink(pull_value)
         
     def run(self, thread_orchestrator: AbstractThreadOrchestrator) -> None:
         self.thread_orchestrator = thread_orchestrator
+        print("Now associating threads")
         self.thread_orchestrator.associate(self.__fill_source_buffer, self.__pull_sink_buffer, self.function_pool)
 
         self.thread_orchestrator.run()
@@ -171,7 +178,8 @@ class TestThreadUnit(AbstractThreadUnit):
         self.thread: Thread = Thread(target=self.run_function_pool)
 
     def run(self):
-        self.thread.run()
+        print(f"starting the thread {self.thread_number}")
+        self.thread.start()
 
     def join(self):
         self.thread.join()
@@ -188,20 +196,23 @@ class TestThreadOrchestrator(AbstractThreadOrchestrator):
         return threading_pool
     
 def test_source() -> float:
-    return 1.0
+    global count
+    sleep(0.5)
+    
+    return int(100 * sin(count))
 
 count = 1
 def test_sink(value: float) -> None:
     global count
-    print(f"{count}: {value}")
     count+=1
             
 if __name__ == "__main__":
-    pipeline = Pipeline(test_source, test_sink, 3, 1)
+    pipeline = Pipeline(test_source, test_sink, 10, 1)
     step = TestPipelineStep()
     pipeline.add_element(step)
     print(step.entry_buffer)
     print(step.exit_buffer)
+    print(pipeline.function_pool)
 
     pipeline.run(TestThreadOrchestrator())
 
